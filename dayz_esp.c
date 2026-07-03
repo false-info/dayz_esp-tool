@@ -1,6 +1,3 @@
-// dayz_esp.c — Complete DayZ ESP Tool
-// Compile: gcc -o dayz_esp dayz_esp.c -lSDL2 -lm -lpthread
-// Run:     sudo ./dayz_esp
 
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -15,24 +12,16 @@
 #include <signal.h>
 #include <SDL2/SDL.h>
 
-// ============================================================
-// SECTION 1: OFFSETS — YOU MUST UPDATE THESE
-// ============================================================
-
-// Static pointer to the World object. FIND THIS with Cheat Engine.
-// It's a static address in DayZ.exe's .data section that always points to the World.
-// Search for "GetWorld" in IDA or follow pointer chain from player position in CE.
-// SET THIS TO 0 until you find it — the tool will run in discovery mode.
 #define WORLD_STATIC_ADDR 0x00000000UL
 
-// World struct offsets (from World object base)
+
 #define OFF_CAMERA           0x1B8   // Camera object pointer
 #define OFF_NEAR_TABLE       0xEB8   // DynamicArray of nearby entities
 #define OFF_ITEM_TABLE       0x1FB8  // DynamicArray of items
 #define OFF_LOCAL_PLAYER     0x15C0  // Local player entity pointer
 #define OFF_GRASS            0xB80   // TerrainGrid float (0 = no grass)
 
-// Entity struct offsets
+
 #define OFF_POSITION         0x2C    // Vector3 (12 bytes: x, y, z floats)
 #define OFF_HEAD_POS         0xF8    // Head/camera position vector3
 #define OFF_TYPE_RTTI        0x148   // RendererEntityType (int)
