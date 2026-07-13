@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 DayZ ESP Overlay — Linux/Proton version
 Run directly on the gaming PC where DayZ runs under Proton.
@@ -52,6 +51,18 @@ TYPE_ITEM        = 0xD7DD68DB
 
 def find_dayz_pid():
     """Find the DayZ_x64.exe PID running under Proton."""
+    # Method 1: pgrep (most reliable on most distros)
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "DayZ_x64.exe"],
+            capture_output=True, text=True
+        )
+        if result.stdout.strip():
+            return int(result.stdout.strip().split('\n')[0])  # first PID
+    except:
+        pass
+
+    # Method 2: ps aux with grep (fallback)
     try:
         result = subprocess.run(
             ["ps", "aux"], capture_output=True, text=True
@@ -63,24 +74,34 @@ def find_dayz_pid():
                 return pid
     except:
         pass
-    
-    # Alternative: find via pgrep
-    try:
-        pid = int(subprocess.check_output(["pgrep", "-f", "DayZ_x64.exe"]).decode().strip())
-        return pid
-    except:
-        return None
+
+    return None
 
 
 def get_base_address(pid):
-    """Get DayZ_x64.exe base address from /proc/pid/maps."""
+    """Get DayZ_x64.exe base address from /proc/pid/maps.
+    Handles various Proton/Wine path formats."""
     try:
         with open(f"/proc/{pid}/maps", "r") as f:
             for line in f:
-                if "DayZ_x64.exe" in line and "r-xp" in line:
+                # Check for multiple possible path patterns
+                line_lower = line.lower()
+                if "dayz_x64.exe" in line_lower or "dayz" in line_lower:
+                    # Only consider executable sections (first mapping usually)
+                    if "r-xp" in line:
+                        return int(line.split("-")[0], 16)
+    except:
+        pass
+
+    # If not found, try a broader search for any executable with 'dayz' in name
+    try:
+        with open(f"/proc/{pid}/maps", "r") as f:
+            for line in f:
+                if "dayz" in line.lower() and "r-xp" in line:
                     return int(line.split("-")[0], 16)
     except:
         pass
+
     return None
 
 
@@ -270,7 +291,6 @@ class DayZESP:
                 self._read_entity(ent)
     
     def _read_entity(self, addr):
-        # Get visual state for position
         vis_state = self.reader.read_u64(addr + OFF_ENTITY_VISUAL_STATE)
         if not vis_state:
             return
@@ -298,12 +318,10 @@ class DayZESP:
         is_player = (type_id == TYPE_DAYZ_PLAYER)
         is_zombie = (type_id == TYPE_INFECTED or "infected" in name.lower() 
                      or "zombie" in name.lower())
-        # If type is unknown but it's in entity table (not item table), it could be player/zombie
         if not is_player and not is_zombie:
             if "survivor" in name.lower() or "player" in name.lower():
                 is_player = True
         
-        # Item in hands
         item_in_hands = ""
         if is_player:
             inv = self.reader.read_u64(addr + OFF_ENTITY_INVENTORY)
@@ -387,7 +405,6 @@ class ESPOverlay(Gtk.Window):
             gdk_win = self.get_window()
             if gdk_win:
                 xid = gdk_win.get_xid()
-                # X11: set _NET_WM_WINDOW_TYPE_DOCK and input pass-through
                 subprocess.run([
                     "xprop", "-id", str(xid),
                     "-f", "_NET_WM_WINDOW_TYPE", "32a",
@@ -407,7 +424,6 @@ class ESPOverlay(Gtk.Window):
         ctx.paint()
         ctx.set_operator(cairo.OPERATOR_OVER)
         
-        # Draw all entities
         for ent in self.esp.entities:
             if not ent["screen"]:
                 continue
@@ -415,14 +431,12 @@ class ESPOverlay(Gtk.Window):
             sx, sy = ent["screen"]
             dist = ent["distance"]
             
-            # Skip if behind camera or off-screen
             if sx < 0 or sx > self.screen_w or sy < 0 or sy > self.screen_h:
                 continue
             
             if dist > 500:
                 continue
             
-            # Color based on type
             if ent["is_player"]:
                 r, g, b = self.col_player
             elif ent["is_zombie"]:
@@ -430,31 +444,25 @@ class ESPOverlay(Gtk.Window):
             else:
                 r, g, b = self.col_item
             
-            # Box size based on distance
             box_h = max(20, 1800 / dist)
             box_w = box_h * 0.6
             
-            # Draw box (rectangle outline)
             ctx.set_source_rgb(r, g, b)
             ctx.set_line_width(1.5)
             ctx.rectangle(sx - box_w/2, sy - box_h, box_w, box_h)
             ctx.stroke()
             
-            # Draw name
             name = ent["name"][:20] if ent["name"] else "Unknown"
             ctx.set_source_rgb(r, g, b)
             ctx.select_font_face("Consolas", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
             ctx.set_font_size(11)
             
-            # Name above box
             ctx.move_to(sx - 50, sy - box_h - 5)
             ctx.show_text(name)
             
-            # Distance
             ctx.move_to(sx - 30, sy - box_h - 18)
             ctx.show_text(f"{dist:.0f}m")
             
-            # Item in hands
             if ent["item_in_hands"]:
                 ctx.move_to(sx - 50, sy + 5)
                 ctx.show_text(f"[{ent['item_in_hands'][:15]}]")
@@ -477,6 +485,15 @@ def main():
     base = get_base_address(pid)
     if not base:
         print("[!] Could not find DayZ base address.")
+        # Print maps for debugging
+        print("    Dumping /proc/pid/maps for lines containing 'dayz':")
+        try:
+            with open(f"/proc/{pid}/maps", "r") as f:
+                for line in f:
+                    if "dayz" in line.lower():
+                        print(f"      {line.strip()}")
+        except:
+            pass
         sys.exit(1)
     
     print(f"[+] DayZ base: 0x{base:x}")
@@ -486,25 +503,23 @@ def main():
     
     esp = DayZESP(reader, base)
     
-    # Verify we can read the world
     world_check = reader.read_u64(base + OFF_WORLD)
     if not world_check:
         print(f"[!] World pointer at 0x{base+OFF_WORLD:x} is null.")
-        print("    Offsets are wrong — run the offset dumper first!")
+        print("    Offsets are wrong — update them with a fresh dump.")
         reader.close()
         sys.exit(1)
     
     print(f"[+] World address: 0x{world_check:x}")
     
     if not HAS_GTK:
-        # Fallback: terminal-based output (debug mode)
         print("\n[!] No GTK available. Running in console mode.")
         print("    Install: sudo pacman -S gtk3 python-gobject cairo\n")
         try:
             while True:
                 esp.update()
                 os.system("clear")
-                print(f"DayZ ESP — Local: ({esp.local_pos.x:.1f}, {esp.local_pos.y:.1f}, {esp.local_pos.z:.1f})")
+                print(f"Local: ({esp.local_pos.x:.1f}, {esp.local_pos.y:.1f}, {esp.local_pos.z:.1f})")
                 print(f"Entities: {len(esp.entities)}\n")
                 for ent in sorted(esp.entities, key=lambda e: e["distance"]):
                     tag = "P" if ent["is_player"] else ("Z" if ent["is_zombie"] else "?")
@@ -515,14 +530,13 @@ def main():
         except KeyboardInterrupt:
             pass
     else:
-        # GTK overlay mode
         overlay = ESPOverlay(esp)
         
         def update_loop():
             while True:
                 esp.update()
                 overlay.queue_draw()
-                time.sleep(0.033)  # ~30 FPS
+                time.sleep(0.033)
         
         thread = threading.Thread(target=update_loop, daemon=True)
         thread.start()
